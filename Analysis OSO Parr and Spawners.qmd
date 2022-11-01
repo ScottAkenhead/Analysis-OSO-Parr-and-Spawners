@@ -1,0 +1,765 @@
+---
+title: "Analysis OSO Parr and Spawners"
+author: "alphabetic: Scott Akenhead, Braden Judsen, Athena Ogden, Howard Stiff"
+date: " `r Sys.Date()` "
+format: html
+editor: visual
+execute: 
+  cache: true
+---
+
+## Osoyoos Lake Parr and Spawners
+
+Data, metadata, and references to background and methods are in [CNAT_nuOkanagan_Juveniles 22.08.17.xlsx](https://docs.google.com/spreadsheets/d/161I9H9kvuyWE90czqNbnxaZeukN60D_g/edit?usp=sharing&ouid=112171968912503831774&rtpof=true&sd=true "in the OK SOS Google Workspace") last updated 2022-10-05 by Howard Stiff. This report is just a first look.
+
+Parr estimates are fall and winter acoustic and trawl surveys (**ATS**) of all *O. nerka* in Osoyoos Lake, most of which will migrate the following Spring as age 0.1 smolts. A small by variable faction are (1) Kokanee that are not anadromous, and (2) parr that will migrate as age 0.2 smolts after an additional lake year.
+
+The age composition of ATS surveys is not assembled in this dataset, but may be inferred from the age composition of return adults (freshwater years are determined: *x.1* and *x.2* where *x* is ocean years).
+
+If parr that will migrate as age 0.2 smolts are a large fraction of ATS estimates, the survival from brood year adults to smolts will be incorrect. This could be a severe overestimate in the case where parr from from abundant spawners grow slowly and consequently produce a large fraction of 0.2 age smolts that are attributed to scant spawner abundance the following year. At the same time, survival from the abundant spawners will be underestimated. These two effects will tend to shift fisheries management toward a higher exploitation rate and a lower target for spawner abundance.\
+\
+Here we present parr and pre-smolts estimate *sans* age.
+
+```{r setup}
+#| echo: false
+#| include: false
+options(show.signif.stars = F)
+library(googlesheets4);library(knitr);
+library(ggplot2);library(reshape2); library(magrittr)
+```
+
+```{r local}
+#| echo: false
+#| include: false
+# ggplot theme via Braden Judson github bioinformatics6020_assignment
+Custom_Theme <- theme_bw() + theme(panel.background = element_rect(fill =  "white", colour = "black", linetype = "solid"), panel.grid.minor = element_line(colour = "white"), plot.caption = element_text(hjust = 0, vjust = 1, size = 12))
+Wstat = function (x,w){
+    if(is.null(x))return(c(m=NA, s=NA, n=0)); 
+    n=length(x)
+    if(n==1)return(c(m=x, s=NA, n=1)); 
+    sw=sum(w)
+    m=sum(w*x)/sw
+    s=sqrt( sum(w*((x-m)^2))/sw)
+    return(c(m,s,n))
+}
+# example
+# x=c(303,250,377); w=c(17, 50, 21)^(-2); w=w/max(w); round(w,2) # 1.00 0.12 0.66
+# round(c(mean(x), sd(x), Wstat(x,w)),1) # 310 63.8  326.9 40.5 
+DOJY <- function(mon,day){  # vectorized version
+    # Day of Julian Year
+    # mon as 1 to 12 or "Jan" to "Dec" or "January" to "December"
+    # add 10 for solar day (Dec 21 = DOJY 355). add 1 if leap year and DOJY > 58
+    prev_end_doy = c(0,31,59,90,120,151,181,212,243,273,304,334)
+    # first the easy one
+    if(is.numeric(mon))return(prev_end_doy[mon]+day) # works for vector arguments
+    # then long or shor nomth names get convereted to a number.
+    n = length(mon)
+    mon_n = integer(n) # number for month TBD
+    month_char=month.abb  # short names from  R
+    if(max(nchar(mon)) > 3)  month_char=month.name #l long names from R 
+    for(j in 1:n) mon_n[j] = which(month_char  %in% mon[j])
+    return(prev_end_doy[mon_n]+day)
+}
+#3xamples 
+#obs_day= c(26,  4, 13, 28, 18)
+#DOJY1(mon=c(5,  8,  9, 11,  1), obs_day) # 146 216 256 332  18
+#DOJY1(mon=c('May','Aug','Sep','Nov','Jan'),obs_day)
+#DOJY1(mon=c('May','August','September','November','January'),obs_day)
+```
+
+### Transformation
+
+The .xlsx file was copied to a Sheet: [copy of CNAT_nuOkanagan_Juveniles 22.08.17](https://docs.google.com/spreadsheets/d/18rpVCnsTnFI2z51bb1_SMhI8Y2pc_1filwfotN9kDDU/edit?usp=sharing "in OK SOX workspace") Only the tab **Juvenile Abundance** was retained. Result of formulae in that tab were converted to *values only.* The information about which dates (rows) were averaged for parr abundance estimates was coded as an additional column *Life_Stage* with values: *Parr, Smolt, omit,* and *blank.* That tab was copied to a tab **sort_shorten** where rows with calculated results were deleted and the data sorted by *Life_Stage*. The result is a sequence of 44 rows for parr abundance estimates, 56 pre-smolt estimates, 13 observations unused for parr and pre-smolt estimates (typically September, see comments in .xlxs), and 3 values marked unusable. These three were deleted, as was a single observation for *Smolt_Year* 2022 without dates.
+
+Sample dates in Excel format was converted to display as yyyy-mm-dd (ISO 6401). The Sheets function *split text into columns* then resulted in usable date information: *Sample_Year, Sample_Month, Sample_Day.*\
+\
+The data is read using *googlesheets4::read_sheet(*URL*).* This table is the data for Parr and Smolt.
+
+```{r r_t1}
+#| code-fold: true
+#| warnings: false
+#| echo: false
+# where is the Google Sheet with ATS survey data?
+path= "https://docs.google.com/spreadsheets/d/18rpVCnsTnFI2z51bb1_SMhI8Y2pc_1filwfotN9kDDU/edit?usp=sharing"
+# skip reading Google Sheet if previously read and saved
+if( file.exists('parr2022-10-07.RData')) {    # local copy
+  a1 <- readRDS('parr2022-10-07.RData')      # restart from here.
+} else {
+  a1 <- read_sheet(path)                    # read Google Sheet
+  saveRDS(a1, file='parr2022-10-07.RData')  # save result
+}
+# clean
+
+a1 <- a1[ !(a1$Life_Stage == "omit"), ]  # not with selected rows
+j <- is.na(a1$Abundance) # empty rows below data in Sheet
+a1 <- a1[ !j , ]  # empty rows below data in Sheet
+a1 <- a1[ !(a1$Smolt_Year == 2022), ] 
+a1<- a1[, -1] # drop Brood: ignores smolt age.
+
+j=order(a1$Smolt_Year, a1$Sample_Year, a1$Sample_Month) # 2nd breaks ties in 1st,.
+a1<- a1[j, ] # sorted 
+kable(a1, digits=c(0,0,0,0,0,0,3), align='cccccrr' )
+```
+
+### Day of the Year for Samples
+
+Dates are converted to solar day of the year: solar day 0 = solar day 365 = Julian day December 21 (imprecise but sufficient), so December 31 is solar day 10. Solar days is Julian day +10. This includes the additional day after February 28 in a leap year: *year mod 4 = 0 & month \> 2.* For parr estimates, Smolt_Year = Sample_Year + 1. Parr surveys can extend past the Julian calendar year end, into Smolt_Year. In that case, to provide uniform ages for a single cohort (brood) of parr and subsequent smolts, the solar year is extended by adding 365.
+
++--------------+--------------+--------------------------+--------------+
+| Radians      | Solar Day\   | Solar Event              | Subsequent\  |
+|              | (rounded)    |                          | Season       |
++:============:+:============:+==========================+:============:+
+| $0,\ 2\pi$   | 0            | *solstitium hiemale*     | winter       |
++--------------+--------------+--------------------------+--------------+
+| $\pi /2$     | 92           | *aequinoctium vernum*    | spring       |
++--------------+--------------+--------------------------+--------------+
+| $\pi$        | 183          | *solstitium aestatis*    | summer       |
++--------------+--------------+--------------------------+--------------+
+| $3 \pi /2$   | 274          | *aequinoctium autumnale* | fall         |
++--------------+--------------+--------------------------+--------------+
+
+: Table. *Cyclus Solis*
+
+```{r solarDay}
+#| echo: false
+#| code-fold: true
+seasons <- (0:5) * 365.25/4
+# 0  91.3125 182.625  273.9375 365.25 456.5625 
+season <- as.data.frame(seasons)  # for ggplot geom_vline()
+# see function DOJY(m,d) in chunk: local
+month_end_doy = cumsum(c(0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30)) 
+  # january days add 0, february days add 31, march days add 59,...
+  # 0  31  59  90 120 151 181 212 243 273 304 334 
+leap_day <- as.numeric(((a1$Sample_Year %% 4) == 0) & (a1$Sample_Month > 2)) 
+  # solar year starts winter solstice, call it December 21, 
+  # solar day is Julian day  + 10. Then mod 365 for Jday Dec 21-31 (not used).
+# calc solar day of year for surveys
+solar = month_end_doy[ a1$Sample_Month] + a1$Sample_Day + 10 + leap_day
+# extend solar doy for winter samples in next Julian year after parr summer.
+# according to smolt year. 
+j <- a1$Smolt_Year == a1$Sample_Year  # samples in smolt year, so after December 31
+solar[j] =solar[j] + 365 
+a1$solar <-solar 
+nobs = dim(a1)[1]
+```
+
+## Relative Abundance Trend
+
+First, the data as collected, all years together.
+
+```{r p_A_doy}
+#| code-fold: true
+#| warning: false
+#| label: plt-raw-solar
+#| fig-cap: "OSO SOX ATS Parr Abundance by Solar Day"
+ggplot( data=a1, aes(solar,Abundance, 
+     group=factor(Smolt_Year),color=factor(Smolt_Year))) + theme_bw() +
+     geom_line() + geom_point() + labs(x="Solar Day") +
+     geom_vline(data=season, aes(xintercept=seasons), col="blue",lty="dotted")
+
+```
+
+## A Model for Mortality Rate
+
+From the simplest model of population decline: a fixed *per capita* mortality rate, we can extract simple regression to describe parr abundance $N$ by days $t$ within a *Smolt_Year*.
+
+$$
+\begin{align}
+\frac{dN}{dt} &= m \\
+N_t &= N_0 e^{-mt}\\
+\text{log}(N_t) &= \text{log}(N_0) -mt \\
+\hat{y} &\sim a -bt
+\end{align}
+$$
+
+Applied to many years (indexed as *j* ), with fixed *m,* this regression estimates the initial abundance $N_0$ at some arbitrary time from all of the observations in that Smolt_Year. Opening *m* to vary by day or year according to various factors (indexed as *i* ) such as water flows, mitigation of extreme flows by FWMT, smolt size, smolt density, and perhaps trends across years:
+
+$$
+\begin{align}
+\text{log}(N_{t,j}) & = \text{log}(N_{0,j}) -mt \\
+ & = \text{log}(N_{0,j}) -(m_0 + \sum_i m_i) t \\
+\end{align}
+$$
+
+First, a review of the abundance estimates as $\text{log}(N_{t})$. The expectation is that estimates within each *Smolt_Year* will be in a straight line.
+
+```{r plt_logA}
+#| code-fold: true
+#| warning: false
+#| #| label: plt-log-solar
+#| fig-cap: "OSO SOX ATS Abundance, Scaled by maxima, by Solar Day"
+ggplot( data=a1, aes(solar,log(Abundance),
+        group=factor(Smolt_Year), color=factor(Smolt_Year) )) + theme_bw() +
+  geom_line() + geom_point() + 
+  labs(x="Solar Day", y = "log(Abundance)") +
+  geom_vline(data= season, aes(xintercept=seasons), col="blue")
+
+```
+
+The lines show a residual convex shape, indicating a decline in *m* with time, pehaps due to parr size, temperature, or day length. Dealing with varying mortality is deferred.
+
+Some data appear erroneous: some abundance estimates exceed preceding estimates in the same brood. Thus attention to relative precision is required. The 95% confidence limit available for each ATS survey estimate is information related to precision and applicable as a regression weight: $(\textit{CL95})^{~ -2}$. The range in *CL95* is 2% to 55%, thus weights range 2500 to 3. Given the objective is to downweight poor data, rather than force lines through points deemed, pehaps spuriously, precise, then maximum weight was set to 100, corresponding to CL_95 \< 10%. This affected 21 observations: their weights are equal and maximal.
+
+For instance, the surveys from Smolt_Year 2011 have a value in June that is much lower that in July (by 28%) and August (by 35%) lower than July, but that June survey has the largest 95% CL for those surveys; the surrounding surveys have weights 2.6 time greater (see Table). Dealing with the uncertainty in the June value helps to clarify an apparent 53% drop in abundance between August and October.
+
+```{r t_err}
+#| code-fold: true
+# add weights
+a1$weight <- a1$CL_95^(-2)
+a1$weight[a1$weight > 100] <- 100
+x <- a1[a1$Smolt_Year == 2011,c(2,3,6,7,9)]  # 7 obs
+kable(x, digits=2,caption = "Table 0. Problematic data with appropriate regression weights" )
+
+```
+
+## Regression: Log(N)\~mt
+
+### Reg.1: N_0 by year, fixed mortality
+
+Step 1 is one line for each year, with mortality rate *m* fixed across all years. This is a preliminary model for comparison to subsequent models for mortality. The estimates for $\text{log}(N_{0,i})$ correspond to a factor for *fSmolt_Year*, enabling the regression $$
+\text{lm}(\  \text{log}(Abundance) \sim -1 + fSmoltYear + solar \ )$$
+
+where -1 (or 0) indicates there is no overall intercept, but separate intercepts for each level of the factor *fSmoltYear*, and a single parameter to estimate the effect accumulating mortality by day. The intercepts are corresond to day $t=0$.
+
+```{r mode_day}
+#| code-fold: true
+#| fig-cap: "Frequency of Spring and Summer parr surveys. Black line: median date, day 204. Black line: Summer Solstice, day 183."
+par(tcl=0.2)
+hist(a1$solar[a1$solar < 250], yaxs="i", ylim=c(0,10), col="salmon", breaks=12, 
+     xlab="Solar Day", main=""); box(); 
+  axis(3,labels=FALSE); axis(4,labels=FALSE)
+abline(v=204.5, lwd=2); abline(v=seasons, col='blue',lty="dotted")
+
+```
+
+The earliest sample is solar day 123, suggesting the date for estimation of $N_0$ at day 120. Alternatively, to minimize extrapolation and be more comparable to conventional estimates (mean abundance before Fall Equinox regardless of day) the mode (about day 215), median (day 204), or mean (day 197) can be used to estimate summer abundance of parr (separately from pre--smolts). There might be an ecological argument for standardizing to Summer Solstice (day 183). In what follows, the median day of surveys before 2021 is day 0 for regressions.
+
+Thus
+
+```{r fsm}
+#| code-fold: true
+# create factor for Smolt_Year
+day0 = 204
+Smolt_Year= 1998:2021
+a1$fSmoltYear <- factor(a1$Smolt_Year)
+reg1 <- lm(log(Abundance) ~ 0 + fSmoltYear + I(solar-day0), data=a1)
+temp <- summary(reg1)$coefficients[1:24 ,1:2]
+temp <- cbind(temp, N0 = exp(temp[,1]),
+              CL95_low =  exp(temp[ ,1] -1.96*temp[,2] ),
+              CL95_high = exp(temp[ ,1] +1.96*temp[,2]) )
+kable(temp, digits=c(2,2,0,0,0) , caption='Parr abundance at solar day 204. Estimate is the fitted log(abundance), the antilog is N_0.')
+```
+
+Estimated abundances at solar day 204 range from e^12.59(0.12)^ thus 233 to 372 thousand in Smolt_Year 2000 to e^16.27(0.08)^ thus 9.93 to 13.7 million in 2016.
+
+Plot Reg.1
+
+```{r pr1}
+#| code-fold: true
+#| warning: false
+#| #| label: plt-log-solar
+#| fig-cap: "Predictions from Reg.1: N_0 by year, fixed mortality"
+# get number surviving every three days, for each Smolt_Year. m is coeff #25
+day<- seq(0,336,3)
+surv= exp(reg1$coefficients[25]* day)  # from 1.0 to 0.43
+n_surv <- surv  %o% exp(reg1$coefficients[1:24]) %>% as.data.frame # outer product
+n_surv$day <- day +120  # column 25; 0,3,6,9,12. 113 rows. Go back to solary day
+  # fSmoltYear1999 fSmoltYear2000  day
+  #      3858906.3       363652.6   120
+n_surv <- melt(n_surv, id.vars="day") # long format to plot
+  # day       variable    value
+  #  120 fSmoltYear1998 1695970
+  #  123 fSmoltYear1998 1683220
+ggplot(data=n_surv, aes(day, value, group=variable)) +
+     theme_bw() + geom_line() + 
+    labs(x="Day", y = "Abundance") +
+     geom_vline(data= season, aes(xintercept=seasons), col="blue")
+
+```
+
+## Project Parr to Smolts
+
+The invariant mortality rate *m* is $0.00251(0.000245) \ day^{-1}$ or 0.25% per day with standard deviation 1/10 that. This is small, about 7.2% per month, but accumulates so that survival from day 204 until day 457 (Spring Equinox, taken as smolt emigration) is
+
+$$
+ 1-e^{-0.00251 (sd: \ 0.000245) \ 253}  = 0.471 \ (0.40 \text{ to } 0.53)
+$$
+
+From that survival, the estimates for smolts would $0.471 \times 294390 = 138657$ in 2000 and $0.471 \times 11648681=5486529$ in 2016.
+
+Including uncertainty in both $N_0\text{ and } m$ to calculate CL95% for their product, the pre-smolts at an emigration date, requires noting that $\text{qnorm}(-1.96)^2=0.025^2=0.000625$ so the CL95% for the projected log abundance is $t\times m(\pm 1.00224\ \sigma_m) \times N_0(\pm 1.00224\ \sigma_{N_0})$. The following table projects pre-smolt abundance at Spring Equinox with CL95%. In passing, using $1\sigma$ to determine CL95% for a product overestimates by a factor of 0.0068: negligible in this context.
+
+```{r proj}
+#| code-fold: true
+m= summary(reg1)$coefficients[25,1:2]  # -0.0025153899,  0.0002451675 
+days=253  # days from date of N_0 parr to N_t projected smolts.
+# m is negative, so (m-se) is more severe mortality, so lower survival
+sigma84=1.00224
+proj= data.frame(
+  PreSmolt= exp( temp[,1] + days * m[1] ), # estimate
+  # low abun, high mort
+  Low95=    exp((temp[,1]-sigma84*temp[,2]) + days*(m[1]-sigma84*m[2])), 
+  # high bund, low mort # low abun, high mort
+  High95=   exp((temp[,1]+sigma84*temp[,2]) + days*(m[1]+sigma84*m[2]))) 
+```
+
+Plot Projected Smolts
+
+```{r pr2}
+#| code-fold: true
+#| warning: false
+#| label: plt-proj
+#| fig-cap: "Predictions from Reg.1: from Parr as N_0 at day 204 by year, with fixed mortality, to smolts at day 457."
+proj$Smolt_Year=Smolt_Year  # add x axis 
+ggplot(proj, aes(x=Smolt_Year, y=PreSmolt)) + theme_bw()+
+    labs( y = "Projected Smolt Abundance") +
+    geom_point() + geom_errorbar(aes(ymin =Low95, ymax =High95), width = 0.2)
+
+
+```
+
+## Reg. 2: Weights and FWMT
+
+The surveys have standard deviations, from which regression weights were calculated as $w= \sigma^{-2}$. See histogram. Weights act via $\text{min} \sum w\epsilon^2$ where $\epsilon$ is the residual: observed - fitted. About half the weights are half the maximum, and about 1/8 of observations are strongly downweighted: less than 20% of maximum.
+
+```{r w_hist}
+#| code-fold: true
+par(tcl=0.2)
+hist(a1$weight, breaks=c(0,20,40,60,80,100), xlab = "Weight", main=''); 
+axis(3,labels=F);axis(4,labels=F); box()
+```
+
+Applying weights will change the preceding regression, as per following table.
+
+```{r reg2}
+#| code-fold: true
+reg2 <- lm(log(Abundance) ~ -1 +fSmoltYear + I(solar-120), 
+           weights= weight, data=a1)
+temp <- summary(reg2)$coefficients[1:24 ,1:2]
+temp <- cbind(temp, N0 = exp(temp[,1]),
+              CL95_low =  exp(temp[ ,1] -1.96*temp[,2] ),
+              CL95_high = exp(temp[ ,1] +1.96*temp[,2]) )
+kable(temp, digits=c(2,2,0,0,0) , caption='Parr abundance at solar day 204 using weighted regression. Estimate is the fitted log(abundance), the antilog is N_0.')
+
+```
+
+With weights, the residuals are all larger, with the extremes 10 times larger: from -0.39 and 0.49 to -3.8 and 3.1, as expected from ill-fitting and imprecise points being less effective. The fixed mortality rate estimate is essentially unchanged, -0.002553 instead of -0.0002515. An overall increase in fitted abundance estimates is from low weights for low outliers, as examined in the following plot.
+
+```{r res_res}
+#|code-fold: true
+rr <- data.frame(x = reg1$coefficients[1:24],y = reg2$coefficients[1:24])
+ggplot(data=rr, aes(x,y)) + theme_bw() +  geom_point()+ 
+    geom_text( aes( label = c(1998:2021)), size=2, nudge_y=0.2 ) + 
+    geom_abline(aes(intercept = 0, slope = 1)) +
+    labs(x="log Abundance, No Weights", y = "log Abundance, Weighted") 
+
+```
+
+The linear, not logarithmic, comparison clarifies how the largest abundances increased.
+
+```{r res_res_e}
+#|code-fold: true
+rr1  <- exp(rr)  # estimates, not logged.
+# nudge_y is on scale with max 15 million.
+ggplot(data=rr1, aes(x,y)) + theme_bw() +  geom_point()+ 
+    geom_text( aes( label = c(1998:2021)), size=2, nudge_y=0.5e6 ) + 
+    geom_abline(aes(intercept = 0, slope = 1)) +
+    labs(x="Abundance, No Weights", y = "Abundance, Weighted") 
+```
+
+# Varying Mortality Rate
+
+Hyatt () describes the parr mortality rate as initially high, related to small size, and declining to nearly zero in winter. Various models for varying *m* might be proposed: $m=f(length)=f(time)$; but the simplest is an exponential decrease with time:
+
+$$ \begin{align}
+dm/dt &=-m_1 \\
+m_t &= m_0~e^{-m_1 t} 
+\end{align} $$
+
+where *m~0~* is the rate at some day *t=1*, and *m~1~* determines how quickly *m~t~* declines. This allows *m* to be invariant, as preceding, if $m_1=0$, or to decline in proportion to days of life.
+
+Note that *t* can be negative, allowing an ecologically meaningful, or practical, choice for day *t=0.* Example: $t=(-100,0,100); ~ m_0=0.0025; ~ m_1=0.002; ~ m_t= (0.00305,0.0025,0.00205).$
+
+Fitting this non-linear model requires searching for parameters that minimize a criterion for fit; a steepest-descent to minimize SSQ (sum of squared residuals). The model has two parts:\
+(1) mortality rates according to day of the year, then (\
+2) for each Smolt_Year, survivals from a fitted $N_0$ at Day Zero (solar day 204) to each survey day is the prediction of parr abundances.
+
+```{r m_vary}
+# exponential decline in mortality rate as model for parr abundance
+  # local functions. 
+  ssq <- function(x) sum((x-mean(x))^2)    # for r^2
+  ssqw <- function(x,w) sum( w* (x-mean(x))^2) / sum(w)   # for r^2
+  axis34 <- function(){axis(3,labels=FALSE);axis(4,labels=FALSE)} 
+# mcurve = function (par, dat, fit=TRUE) {
+#   #    n0=par[1]; m=par[2]; lambda=par[3];
+#   mt   = par[2]*exp(-par[3]*dat[,1]) # exponential decline in mortality rate.
+#   yhat = par[1]*exp(-mt*dat[ ,1]) # decline in parr abundance.
+#   ssq  = sum((yhat-dat[ ,2])^2)
+#   if(fit) return(ssq)     # for optimizing
+#   return(list(ssq, yhat)) # post fit, examine result
+# }
+  
+Parr1 <- function (par, dat, fit=TRUE) {
+  # par is m0 and m1 then 24 of n0
+  # dat is factor, day, abundance, survival 
+  # day previously adjusted by subtracting Day Zero (? median day summer surveys)    
+  a = range(dat[,'day']) # earliest and latest survey day: -81 258
+  first_day = a[1]; last_day=a[2] 
+  ndays = 1 + (a[2]-a[1]) # duration, inclusive. 1 + (258 - -81) = 340
+  surv=numeric(ndays)  
+# Step 1. mt the declining mortality rate, by days, same every Smolt_Year
+  mt = par[1]*exp(-par[2]*(first_day:last_day) )  # each day's rate
+# Step 2. survival from day zero to first day is >1.
+  surv[1] = exp(-mt[1] * first_day) # exp(-0.00674 * -81) = 1.726751
+# Step 3. subsequent survival to each eay. all preceding survivals
+  surv = cumprod(c(surv[1],exp(-mt[-1]))) 
+  # x[c(1,81,160,ndays)] 1.726 1.193 1.012 0.902
+# Step 4. match survival from Day Zero (204) to ATS survey day
+  # note: range(dat[,2] - first_day)  0, 339 so add 1 to index dat[,2] into surv
+  dat$survival = surv[1+(dat[,2]-first_day)] 
+  # dat$day[1:5]        16  113  -66   11   81  
+  # dat$survival[1:5] 1.14 0.97 1.57 1.15 1.01
+# Step 5. predictions for survey abundances within each Smolt_Year
+  # fitted estimate of N at Day Zero for each Smolt Year, 
+  # multiplied by survival to survey day.
+  # by(dat,fac,function(x) with(x,{unclass(x[,1])[1];}) ) # develop
+  yhat <-  by(dat,fac,function(x) with(x, {
+      j <- unclass(x[,1])[1]; # which parameter is fitted N_0 for this Smolt_Year
+      nt <- par[j+2] * survival # predicted abundance, N_t = N_0*survival
+  }))
+# Step 5. Reduce all that to just: How well did that trial fit? 
+  # weighted Sum of Squares
+  ssq  = sum( ((unlist(yhat)-dat[ ,3])^2) * a1$weight)
+  if(fit) return(ssq)     # for optimizing. Default is fit=TRUE
+  return(list(ssq, yhat)) # to examine result. Override so fit=FALSE
+}
+
+#
+# first guess, initial abundance is max each smolt year.
+# abundance as millions.
+n0 <- by(a1$Abundance, INDICES=factor(a1$Smolt_Year), max) %>% 
+    as.numeric %>% `*`(1e-6)
+names(n0) <- 1998:2021 %>% as.character %>% substr(3,4) %>% 
+    paste0('Smolts',., sep='') # "Smolts98", "Smolts99"...
+print(round(n0,2))
+fac= as.factor(a1$Smolt_Year)
+day= a1$solar-204 # day0 is date for N0 is solar 204
+dat <- data.frame(fac, day, obs=a1$Abundance*1e-6, survival=99.99)
+# guess for m_0 is fitted fixed m + 20%
+# guess for lambda (rate of decline in m) is  0.01, 224%  in -81 days, 7% in 100 days.
+par=c( m0=0.003, m1=0.01, n0) # first guess, 26 parameters
+cat(' guess:', par, '\n')
+# testing
+x <- Parr1(par,dat,  fit=FALSE) # default: fit=TRUE
+#
+reg1 = optim(par, Parr1, method='BFGS', dat=dat)    # search: simplex (!)
+cat(' fit:', reg1$par,'\n')
+# parameters recovered
+yhat = Parr1(reg1$par, dat, fit=FALSE)[[2]] %>% unlist # predicted
+r2 = 1- reg1$value/ssq(dat[ ,2]); cat('r2:',r2, '\n')
+r2w = 1- reg1$value/ssqw(dat[ ,2], a1$weight); cat('r2w:',r2w, '\n')
+resid=data.frame(Smolt_Year=a1$Smolt_Year,observed=dat[ ,3], 
+                 predicted=yhat, residual=dat[ ,3]-yhat )
+kable(resid, digits=c(0,2,2,3), row.names = FALSE)
+# plot all
+
+par(tcl=0.2,mgp=c(1.25,.25,0))        # tics inside, axis labels close
+# ylim=range( c(dat[ ,3], yhat))        # over all y to be plotted
+plot(resid[, 2:3], pch=20, cex=0.6)   # observed
+   axis34()                           # tics on top and right
+abline(0,1)
+
+
+ ##| colde=fold: true
+#reg3 <- lm(log(Abundance) ~ -1 +fSmoltYear + I(solar-120), 
+#           weights= weight, data=a1)
+# kable(summary(reg2)$coefficients[,1:2], digits=3)
+
+```
+
+# Conventional Estimation
+
+Published estimates of OSO SOX parr annual abundance are the mean of abundance estimated in 1 to 4 surveys in summer, before September, and similarly, pre-smolt estimates are from winter surveys, before pre-smolts aggregate for migration in March. The surveys used for annual abundances are known, and the resulting estimates are determined for comparison to the preceding regression.
+
+```{r est_conv}
+#| code-fold: true
+# group data by Smolt_Year and Life_Stage (Parr, Smolt) ... these are INDICES.
+# then, BY group, determine statistics: mean, sd, n. 
+ind = list(factor(a1$Smolt_Year),factor(a1$Life_Stage)) # 24 Parr then 24 Smolt
+conv_m  <- by(a1$Abundance, ind, mean ) %>% as.numeric  
+conv_sd <- by(a1$Abundance, ind, sd   ) %>% as.numeric  
+conv_n  <- by(a1$Abundance, ind,length) %>% as.numeric 
+# assemble results to display as table,
+nyears = 1 + 2021- 1998 #24
+conv <- data.frame(Smolt_Year=1998:2021,
+  Parr_m=conv_m[1:nyears], Parr_sd=conv_sd[1:nyears],  Parr_n=conv_n[1:nyears],
+  PreSmolt_m=conv_m[nyears+1:nyears], PreSmolt_sd=conv_sd[nyears+1:nyears],
+  PreSmolt_n=conv_n[nyears+1:nyears] )
+kable(conv,digits=0)
+```
+
+```{r errbars}
+#| code-fold: true
+# set up confidence limits for plot.
+conv <- within(conv,{
+  Parr_upper = Parr_m + 2*Parr_sd; # SD not SE= SD/root(N) 
+  Parr_lower = Parr_m - 2*Parr_sd;
+  PreSmolt_upper = PreSmolt_m + 2*PreSmolt_sd;
+  PreSmolt_lower = PreSmolt_m - 2*PreSmolt_sd; 
+})
+kable(conv, digits=0)
+```
+
+```{r plt_conv_parr}
+#| code-fold: true
+#| warning: false
+ggplot(conv, aes(x=Smolt_Year, y=Parr_m)) + theme_bw()+
+    geom_point() + geom_errorbar(aes(ymin = Parr_lower, ymax = Parr_upper), width = 0.2)
+
+```
+
+```{r plt2_conv_presmolt}
+#| code-fold: true
+#| warning: false
+ggplot(conv, aes(x=Smolt_Year, y=PreSmolt_m)) + theme_bw()+
+    geom_point() + geom_errorbar(aes(ymin = PreSmolt_lower, ymax = PreSmolt_upper), width = 0.2)
+
+```
+
+## Conventional But Weighted
+
+### Selecting Weights
+
+One option for regression weights are the 95% confidence limits for each ATS survey, used as the inverse. $CL95\% = 2\sigma /\bar{x}$ from which $\sigma=\bar{x} \times CL95\%/2$ and precision $w=\sigma^{-2}$ is the typical approach to weights. In this situation, widely varying abundance $\bar{x}$ amplifies the effect of CL95% to result in extreme ranges in precision within a brood year, more so across all observations.
+
+For example, Smolt_Year 2004 exhibits 21% survival over 280 days three surveys (see table); despite 95%CL ranging by a factor of 2.2, *w* ranges by a factor of 56, essentially eliminating an observation. The scheme chosen for weights is $(CL95\%)^{-2}$ which is intermediate in severity.
+
+<table style="width:78%;">
+<colgroup>
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+<col style="width: 7%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th><p>Smolt<br />
+Year</p></th>
+<th><p>Sample Year</p></th>
+<th><p>Sample Month</p></th>
+<th><p>Sample<br />
+Day</p></th>
+<th><p>Life<br />
+Stage</p></th>
+<th><p>Abundance</p></th>
+<th><p>CL95%</p></th>
+<th><p>1/CL95%</p></th>
+<th><p>Precision <em>w</em> (scaled)</p></th>
+<th><p>Selected<br />
+Weight</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><p>2004</p></td>
+<td><p>2003</p></td>
+<td><p>5</p></td>
+<td><p>26</p></td>
+<td><p>Parr</p></td>
+<td><p>2052392</p></td>
+<td><p>0.22</p></td>
+<td><p>4.8</p></td>
+<td><p>5</p></td>
+<td><p>21</p></td>
+</tr>
+<tr class="even">
+<td><p>2004</p></td>
+<td><p>2003</p></td>
+<td><p>9</p></td>
+<td><p>21</p></td>
+<td><p>Smolt</p></td>
+<td><p>821678</p></td>
+<td><p>0.10</p></td>
+<td><p>10.0</p></td>
+<td><p>76</p></td>
+<td><p>100</p></td>
+</tr>
+<tr class="odd">
+<td><p>2004</p></td>
+<td><p>2004</p></td>
+<td><p>3</p></td>
+<td><p>2</p></td>
+<td><p>Smolt</p></td>
+<td><p>434032</p></td>
+<td><p>0.14</p></td>
+<td><p>7.1</p></td>
+<td><p>271</p></td>
+<td><p>51</p></td>
+</tr>
+</tbody>
+</table>
+
+As previously, given the range of confidence limits from 0.02% to 55%, and the intention to downweight poor estimates rather than over-emphasize the best estimates, CL95% values smaller than the median, 14%, were set to the median. , 14%. The range in regression weight is then 51 (best half) to 3.3 (worst); 23 surveys have weight \<25, 7 have weight \<10.
+
+```{r wcon}
+#| code-fold: true
+cl=a1$CL_95; cl_med = median(cl)
+cl[cl < cl_med] <- cl_med # is less than median, set to median.
+weight= cl^-2
+rm(cl,cl_med)
+```
+
+### Weighted Mean, Weighted SD
+
+The weighted mean is simply $\mu_w =\sum wx / \sum w$ and is used to determine $\sigma_w$, the weighted standard deviation, $\sigma^2_w = \sum w(\mu_w - x)^2 / \sum w$.
+
+```{r est_convW}
+#| code-fold: true
+#| warning: false
+# group Abundance by Smolt_Year and Life_Stage (Parr, Smolt) ... these are INDICES.
+INDICES=list(factor(a1$Smolt_Year),factor(a1$Life_Stage))
+x <- by(a1$Abundance, INDICES, identity ) 
+nx <- length(x) # 48. 24 Parr then 24 Smolt. A list of 48 lists of data
+# identical grouping of weight
+w <- by(weight, INDICES, identity )
+# apply function for weighted mean, weighted sd. Lots of NA in result.
+wconv= matrix(nrow=nx, ncol=3) # storage
+for( j in 1:nx) wconv[j, ] <- Wstat(x[[j]],w[[j]]) 
+
+# assemble results to display as table,
+nyears = 1 + 2021- 1998 #24
+conv <- data.frame(Smolt_Year=1998:2021,
+  Parr_m=conv_m[1:nyears], Parr_sd=conv_sd[1:nyears],  Parr_n=conv_n[1:nyears],
+  PreSmolt_m=conv_m[nyears+1:nyears], PreSmolt_sd=conv_sd[nyears+1:nyears],
+  PreSmolt_n=conv_n[nyears+1:nyears] )
+kable(conv,digits=0)
+```
+
+```{r errbrr}
+#| code-fold: true
+# set up confidence limits for plot.
+conv <- within(conv,{
+  Parr_upper = Parr_m + 2*Parr_sd; # SD not SE= SD/root(N) 
+  Parr_lower = Parr_m - 2*Parr_sd;
+  PreSmolt_upper = PreSmolt_m + 2*PreSmolt_sd;
+  PreSmolt_lower = PreSmolt_m - 2*PreSmolt_sd; 
+})
+kable(conv, digits=0)
+```
+
+# Ecological Factors
+
+OSO SOX parr mortality rates vary between years from natural and man-made factors including water flow events that affect Osoyoos Lake limnology, a pollution episode, and perhaps parr density. Further, mortality rates may vary within smolt year due to temperature and season (less mortality during winter quiescence) and smolt size (growth rate is a mechanism for a density effect).
+
+### A Factor for FWMT
+
+***Hypothesis:*** Parr mortality rates changed after FMWT operations.
+
+\
+Alexander and Hyatt (2013) declared:
+
+> *Deployment and Routine In-season Use 2004+.*
+
+Which implies Smolt_Year 2005 is the first to which this factor applies.
+
+**Alexander, C.A.D. and K. Hyatt, eds.** 2013. The Okanagan Fish/Water Management Tool (OKFWM): Record of Design (v.2.4.000). Prepared for Canadian Okanagan Basin Technical Working Group, Kamloops, BC. 161 pp.  
+
+This differs from from [SYNTHESIS SUMMARY SENT TO DCPUD September 2022](https://docs.google.com/document/d/1QAEfSynfmUtDBHqJLMHqo2HJCxe3iH80/edit "via email from Karilyn Alex o Athena Ogden")
+
+> The all-year average of 185,836 total returns of Okanagan Sockeye Salmon from 2008 to 2021 ("test period" for this report) exceeds the annual average total production of 47,863 during 1967 to 2004 ("control period" for this report) by roughly a factor of 4 (Component 5). 
+>
+> Observation of a 148% increase in the mean annual index of Sockeye smolt production from Osoyoos Lake in years following FWMT deployment (2004-2021 brood-year test-interval) by comparison with years prior to FWMT deployment (1996-2003 brood-year control interval).(Component 4)
+
+Return_Year 2008 implies Brood_Year 2004, given bulk of returns are fish aged 2.1: 2 sea winters, 1 lake winter, after 1 winter in gravel starting Fall 2004. Manipulations of flows that affect parr in 2004 appear to be the first in the ***test period***, and these flows affect Smolt Year 2005 (ignoring smolts age 0.2).
+
+The FMWT factor affects the mortality rate estimate: the result is two estimates of mortality rate, before Smolt_Year 2005 and after. That change in mortality will affect estimates for initial abundances.
+
+There are 20 ATS surveys in 7 Smolt_Years 1998-2004 before FWMT. The median of weights before is 25 and of after is 59.
+
+```{r reg2a_w_f}
+#| code-fold: true
+a1$fwmt <- factor (c(rep("off",20),rep("on",80))) 
+reg2a <- lm(log(Abundance) ~ -1 +fSmoltYear + I(solar-120):fwmt, 
+           weights= weight, data=a1)
+summary(reg2a)
+```
+
+### Factors for Scour and Dessication
+
+#### Source
+
+From sheet [SK fry emergence and flows (7 Oct 2022)](https://docs.google.com/spreadsheets/d/1KJZTFHknMlIPw_IUNLHsDUiaLlnMW_1NAx7w3Q7Ypxk "in OK SOX/Data/Data in Sheets")
+
+Years when fry would be affected by floods:
+
+-   years when flow \>28.3cms early in the emergence (while still eggs; often occurs in February)
+
+    -   2019, 2017, 2004
+
+-   years when flow \>28.3cms late into emergence (tail end, stages 3 and 4):
+
+    -   2016, 2012, 2001
+
+years fry would be affected by dessication (drought, low flow):
+
+-   minimal drought and desiccation issues
+
+    -   2008
+
+From [Alexander and Hyatt (2013)](https://docs.google.com/document/d/12MrpdrGenvrN3QvVjFX77pRVBNcXyCLJ "in OK SOX") Table 3.4: Low, average, and high inflow years (1970-1999).
+
+-   years of high inflow
+
+    -   1972,1974, 1983, 1996, 1997
+
+From this, scour was a factor for six Sample_Years. \[ REPLACE PARR ABUND\]
+
++---------------+------------------------+
+| Sample Year   | Initial Parr Abundance |
++===============+========================+
+| 2001          | 4.9                    |
++---------------+------------------------+
+| 2004          | 1.2                    |
++---------------+------------------------+
+| 2012          | 5.2                    |
++---------------+------------------------+
+| 2016          | 3.7                    |
++---------------+------------------------+
+| 2017          | 8.2                    |
++---------------+------------------------+
+| 2019          | 4.6                    |
++---------------+------------------------+
+
+: Scour Years and corresponding Smolt Year (subsequent) initial abundances (millions) of Parr (regression 2a).
+
+```{r scour}
+# a factor by Brood_Year from scour identified by Sample_Year, so add 1.
+fScour = factor(a1$Smolt_Year %in% (1+c(2001, 2004, 2012, 2016, 2017, 2019)))
+```
+
+### Factor for Poison (Testalinden 02010-06-13)
+
+Athena Ogden, email 02022-10-09:
+
+> *See slide 16 of my AFS presentation on TL. According to those plots, brood years 2009 and 2010 seem to have been affected by the Testalinden slide on June 13, 2010. See also slide 18: possibly in-lake % pre-smolt per fry gradually returned to "normal" over a few years after the TL slide event.*
+
+Thus a mortality factor for Smolt_Years 2011 and if remains to be seen if 2012 should be similarly treated.
+
+```{r poison}
+# poison year 2010 is smolt year 2011
+fPoison = factor(a1$Smolt_Year == 2011)
+```
+
+# Discussion \[TBD}
+
+## Initial Parr Abundance
+
+If fry emerge from gravel in Okanogan River at arpproximately Spring Equinox, and migrate downstream to enter Osoyoos Lake and transform to parr by day 120, and if a parr survey conducted at Summer Solstice (day 182) estimates abundance as *N*, how many parr existed at day 120? To standardize parr abundance estimates to a fixed day requires a mortality rate estimate *m* allowing $N_{120}=N_{182} e^{m(120-182)}$. Averaged across all years, without attention to precision or ecological factors, $m=-0.0025 \ ( \text{sd}\  0.00025)$ so $N_{120}=1.17 \ N_{182}$.
+
+Extrapolation increases the standard deviation of the abundance estimate as well as the extrapolated estimate, with additional increase in the range of likely values from the standard deviation of the mortality rate estimate, $e^{-62( m\pm 2\sigma)} = (1.13, 1.20)$. It would be better to estimate abundances at the median sample date of all surveys. This does not prevent inclusion of an ecological factor operating by day: flows, parr length, temperature, insolation,.
